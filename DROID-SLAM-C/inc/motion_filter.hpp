@@ -101,6 +101,12 @@ public:
     // Debug
     int         m_saveRawImage       = 0;
 
+
+
+#if defined(CV28) || defined(CV28_SIMULATOR)
+    ea_tensor_t* cvmat_to_ea_tensor(const cv::Mat& img);
+#endif
+
 private:
 
 #if defined(CV28) || defined(CV28_SIMULATOR)
@@ -182,10 +188,6 @@ private:
 
     bool process_one_image( cv::Mat image,
                             FrameData& outFrame);
-
-#if defined(CV28) || defined(CV28_SIMULATOR)
-    ea_tensor_t* cvmat_to_ea_tensor(const cv::Mat& img);
-#endif
 
     FrameData m_frameData;
 
