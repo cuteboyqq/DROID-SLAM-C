@@ -53,8 +53,7 @@ MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
 
     m_calib = loadCalib(m_calibPath);
     if (m_calib.size() < 4) {
-        std::cerr << "Calibration file must have at least 4 numbers." << std::endl;
-        return false;
+        logger->error("Calibration file must have at least 4 numbers.");
     }
 
 		// Initialize network parameters
@@ -654,10 +653,13 @@ ea_tensor_t* MotionFilter::cvmat_to_ea_tensor(const cv::Mat& img)
     int W = img.cols;
     int C = img.channels();
 
-    ea_index_t shape[3] = { W, H, C };
+    // EA wants size_t for shape array
+    size_t shape[3] = { (size_t)W, (size_t)H, (size_t)C };
 
-    // Create tensor (uint8)
-    ea_tensor_t* tensor = ea_tensor_new(3, shape, EA_UINT8);
+    // dtype = EA_U8
+    // shape = pointer to size_t array
+    // pitch = 0 (default, contiguous)
+    ea_tensor_t* tensor = ea_tensor_new(EA_U8, shape, 0);
 
     // Copy image data
     uint8_t* dst = (uint8_t*)ea_tensor_data(tensor);
@@ -665,7 +667,6 @@ ea_tensor_t* MotionFilter::cvmat_to_ea_tensor(const cv::Mat& img)
 
     return tensor;
 }
-
 
 
 // =================================================================================================
@@ -705,11 +706,11 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 	std::unique_lock<std::mutex> pred_lock(m_pred_mutex);
 
 	// STEP 1: load input tensor
-	if (!_loadInput(imgTensor))
-	{
-		logger->error("Load Input Data Failed");
-		return false;
-	}
+	// if (!_loadInput(imgTensor))
+	// {
+	// 	logger->error("Load Input Data Failed");
+	// 	return false;
+	// }
 	cv::Mat img = imgUtil::convertTensorToMat(imgTensor);
 
 	// DROID-SLAM process one image of cv::Mat format, TODO: Alister add 2025-11-24
@@ -718,8 +719,9 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 
 	// DROID-SLAM, convert cv::Mat into  ea_tensor* , Alister add 2025-11-24
 	cv::Mat processedImg =  m_frameData.image;	
-	ea_tensor_t* imgTensor = cvmat_to_ea_tensor(processedImg);
-	if (!_loadInput(imgTensor))
+	ea_tensor_t* tensorImg = cvmat_to_ea_tensor(processedImg);
+
+	if (!_loadInput(tensorImg))
 	{
 		logger->error("Load Input Data Failed");
 		return false;
@@ -834,7 +836,7 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 			m_slam_pred.inpBuff   = new float[m_inpBufferSize]; 
 			// Copy output tensors to prediction buffers
 			std::memcpy(m_slam_pred.netBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[0]), m_netBufferSize * sizeof(float));
-			std::memcpy(m_slam_pred.inpBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[0]), m_inpBufferSize * sizeof(float));
+			std::memcpy(m_slam_pred.inpBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[1]), m_inpBufferSize * sizeof(float));
 		}
 
 		if (EA_SUCCESS != ea_net_forward(m_model, 1))
