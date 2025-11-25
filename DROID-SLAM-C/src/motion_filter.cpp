@@ -13,7 +13,6 @@
 
 #include "motion_filter.hpp"
 
-
 MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
     : m_numAnchorBox((MODEL_WIDTH * MODEL_HEIGHT / 64) + (MODEL_WIDTH * MODEL_HEIGHT / 256)
                      + (MODEL_WIDTH * MODEL_HEIGHT / 1024)),
@@ -22,9 +21,9 @@ MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
       m_classBufferSize(m_numAnchorBox),
 	  m_kptsBufferSize(m_numKeypoints * 3 * m_numAnchorBox),
       m_estimateTime(config->stShowProcTimeConfig.AIModel),
-	  m_netBufferSize(1 * 128 * (MODEL_WIDTH / 8) * (MODEL_HEIGHT / 8)), // DROID_SLAM
-	  m_inpBufferSize(1 * 128 * (MODEL_WIDTH / 8) * (MODEL_HEIGHT / 8)), // DROID_SLAM
-	  m_gmapBufferSize(1 * 128 * (MODEL_WIDTH / 8) * (MODEL_HEIGHT / 8)) // DROID_SLAM
+	  m_netBufferSize(1 * 128 * (384 / 8) * (512 / 8)), // DROID_SLAM
+	  m_inpBufferSize(1 * 128 * (384 / 8) * (512 / 8)), // DROID_SLAM
+	  m_gmapBufferSize(1 * 128 * (384 / 8) * (512 / 8)) // DROID_SLAM
 
 {
 #ifdef SPDLOG_USE_SYSLOG
@@ -59,17 +58,19 @@ MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
 		// Initialize network parameters
 		ea_net_params_t net_params;
 		memset(&net_params, 0 , sizeof(net_params));
+		// Set GPU ID to -1 to use CPU
+		net_params.acinf_gpu_id = -1;
 
 		// Initialize DROID_SLAM network parameters,Alister add 2025-11-24
 		ea_net_params_t cnet_params;
 		memset(&cnet_params, 0 , sizeof(cnet_params));
+		// Set GPU ID to -1 to use CPU
+		cnet_params.acinf_gpu_id = -1;
 
 		ea_net_params_t fnet_params;
 		memset(&fnet_params, 0 , sizeof(fnet_params));
-
-
 		// Set GPU ID to -1 to use CPU
-		net_params.acinf_gpu_id = -1;
+		fnet_params.acinf_gpu_id = -1;
 
 		// Create network instance  
 		m_model 		= ea_net_new(&net_params);
@@ -80,22 +81,30 @@ MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
     if (m_model == NULL)
     {
 			logger->error("Creating YOLOv8 model failed");
-    }
+    }else{
+		logger->info("Creating YOLOv8 model successful");
+	}
 		// RVAL_ASSERT(m_model != NULL); //TODO:
 
 	// Creating DROID-SLANM model check, Alister add 2025-11-22
 	if (m_fnet_model == NULL)
 	{
 		logger->error("Creating DROID SLAM fnet model failed");
+	}else{
+		logger->info("Creating DROID SLAM fnet model successful");
 	}
 
 	if (m_cnet_model == NULL)
 	{
 		logger->error("Creating DROID SLAM cnet model failed");
+	}else{
+		logger->info("Creating DROID SLAM cnet model successful");
 	}
 
 		m_img 					= NULL; //TODO:
 		m_inputTensor 	= NULL;
+		m_cnet_inputTensor = NULL; // DROID-SLAM
+		m_fnet_inputTensor = NULL; // DROID-SLAM
 
 		m_outputTensors 	 = std::vector<ea_tensor_t*>(m_outputTensorList.size()); //TODO:
 		// DROID_SLAM 2025-11-24 Alister modified
@@ -220,39 +229,14 @@ void MotionFilter::_initModelIO()
 	logger->info("-------------------------------------------");
 	logger->info("Configure Model Input/Output");
 
-	// Configure input tensor
-	logger->info("-------------------------------------------");
-	logger->info("Configure Input Tensor");
-	logger->info("Input Name: {}", m_inputTensorName);
-	rval = ea_net_config_input(m_model, m_inputTensorName.c_str());
-	// RVAL_ASSERT(rval == EA_SUCCESS);
-
-	// Configure output tensors
-	// Configure output tensors
-	logger->info("-------------------------------------------");
-	logger->info("Configure Output Tensors");
-
-	for (size_t i = 0; i < m_outputTensorList.size(); ++i) {
-		logger->info("Output Name: {}", m_outputTensorList[i]);
-		rval = ea_net_config_output(m_model, m_outputTensorList[i].c_str());
-		// RVAL_ASSERT(rval == EA_SUCCESS);
-	}
-
-	// DROID-SLAM , Alister 2025-11-24
-	for (size_t i = 0; i < m_fnet_outputTensorList.size(); ++i) {
-		logger->info("Output Name: {}", m_fnet_outputTensorList[i]);
-		rval = ea_net_config_output(m_fnet_model, m_fnet_outputTensorList[i].c_str());
-	}
-	for (size_t i = 0; i < m_cnet_outputTensorList.size(); ++i) {
-		logger->info("Output Name: {}", m_cnet_outputTensorList[i]);
-		rval = ea_net_config_output(m_cnet_model, m_cnet_outputTensorList[i].c_str());
-	}
-
 
 	// Configure model path
 	logger->info("-------------------------------------------");
 	logger->info("Load Model");
 	logger->info("Model Path: {}", m_ptrModelPath);
+	// DROID-SLAM
+	logger->info("fnet Model Path: {}", m_fnet_ptrModelPath);
+	logger->info("cnet Model Path: {}", m_cnet_ptrModelPath);
 
 	// Check if model path exists before loading
 	if (m_ptrModelPath == nullptr || strlen(m_ptrModelPath) == 0) {
@@ -267,24 +251,106 @@ void MotionFilter::_initModelIO()
 		return;
 	}
 	fclose(file);
-	
-	logger->info("Model file exists, proceeding with loading");
 
+	logger->info("yolov8 Model file exists, proceeding with loading");
+	
+	// cnet, Alister add 2025-11-24 
+	FILE* file_cnet = fopen(m_cnet_ptrModelPath, "r");
+	if (file_cnet == nullptr) {
+		logger->error("cnet Model file does not exist at path: {}", m_cnet_ptrModelPath);
+		return;
+	}
+	fclose(file_cnet);
+	logger->info("cnet Model file exists, proceeding with loading");
+
+	// fnet, Alister add 2025-11-24 
+	FILE* file_fnet = fopen(m_fnet_ptrModelPath, "r");
+	if (file_fnet == nullptr) {
+		logger->error("fnet Model file does not exist at path: {}", m_fnet_ptrModelPath);
+		return;
+	}
+	fclose(file_fnet);
+	logger->info("fnet Model file exists, proceeding with loading");
+
+
+	//--------------------
+	//ea_net_config_output
+	//--------------------
+	// Configure input tensor
+	logger->info("-------------------------------------------");
+	logger->info("Configure Input Tensor");
+	logger->info("Input Name: {}", m_inputTensorName);
+	rval = ea_net_config_input(m_model, m_inputTensorName.c_str());
+
+	logger->info("-------------------------------------------");
+	logger->info("Configure Output Tensors");
+
+	for (size_t i = 0; i < m_outputTensorList.size(); ++i) {
+		logger->info("Output Name: {}", m_outputTensorList[i]);
+		rval = ea_net_config_output(m_model, m_outputTensorList[i].c_str());
+		// RVAL_ASSERT(rval == EA_SUCCESS);
+	}
+	// RVAL_ASSERT(rval == EA_SUCCESS);
+	//------------------
+	// DROID-SLAM fnet
+	//-----------------
+	logger->info("-------------------------------------------");
+	logger->info("Configure fnet Input Tensor");
+	logger->info("Input Name: {}", m_inputTensorName);
+	rval = ea_net_config_input(m_fnet_model, m_fnet_inputTensorName.c_str());
+
+	// DROID-SLAM , Alister 2025-11-24
+	// logger->info("-------------------------------------------");
+	logger->info("Configure Output Tensors");
+	for (size_t i = 0; i < m_fnet_outputTensorList.size(); ++i) {
+		logger->info("Output Name: {}", m_fnet_outputTensorList[i]);
+		rval = ea_net_config_output(m_fnet_model, m_fnet_outputTensorList[i].c_str());
+	}
+	//------------------
+	// DROID-SLAM cnet
+	//------------------
+	logger->info("-------------------------------------------");
+	logger->info("Configure cnet Input Tensor");
+	logger->info("Input Name: {}", m_inputTensorName);
+	rval = ea_net_config_input(m_cnet_model, m_cnet_inputTensorName.c_str());
+
+	// Configure output tensors
+	// Configure output tensors
+
+	// logger->info("-------------------------------------------");
+	logger->info("Configure Output Tensors");
+	for (size_t i = 0; i < m_cnet_outputTensorList.size(); ++i) {
+		logger->info("Output Name: {}", m_cnet_outputTensorList[i]);
+		rval = ea_net_config_output(m_cnet_model, m_cnet_outputTensorList[i].c_str());
+	}
+	//---------------------------------------------------------------------------------------------------------
+
+
+	//-------------
+	// ea_net_load
+	//--------------
 	rval = ea_net_load(m_model, EA_NET_LOAD_FILE, (void *)m_ptrModelPath, 1/*max_batch*/);
-
+	logger->info("ea_net_load yolov8 model finished");
 	//DROID_SLAM, Alister modified 2025-11-24
-	rval = ea_net_load(m_fnet_model , EA_NET_LOAD_FILE, (void *)m_fnet_ptrModelPath, 1/*max_batch*/);
-	rval = ea_net_load(m_cnet_model , EA_NET_LOAD_FILE, (void *)m_cnet_ptrModelPath, 1/*max_batch*/);
 	
+	rval = ea_net_load(m_fnet_model , EA_NET_LOAD_FILE, (void *)m_fnet_ptrModelPath, 1/*max_batch*/);
+	logger->info("ea_net_load fnet model finished");
+
+	rval = ea_net_load(m_cnet_model , EA_NET_LOAD_FILE, (void *)m_cnet_ptrModelPath, 1/*max_batch*/);
+	logger->info("ea_net_load cnet model finished");
 	// RVAL_ASSERT(rval == EA_SUCCESS);	
+
+	
+	//------------------
+	// ea_net_input
+	//------------------
 
 	// Get input tensor
 	logger->info("-------------------------------------------");
 	logger->info("Create Model Input Tensor");
-	m_inputTensor   = ea_net_input(m_model, m_inputTensorName.c_str());
-	// DROID-SLAM, Alister modified 2025-11-24
-	m_fnet_inputTensor    = ea_net_input(m_fnet_model , m_inputTensorName.c_str());
-	m_cnet_inputTensor    = ea_net_input(m_cnet_model , m_inputTensorName.c_str());
+	m_inputTensor   		= ea_net_input(m_model, m_inputTensorName.c_str());
+	logger->info("m_inputTensor ptr = {}", (void*)m_inputTensor);
+	logger->info("yolov8 m_inputTensor finished");
 	
 	// RVAL_ASSERT(m_inputTensor != NULL);
 	m_inputHeight 	= ea_tensor_shape(m_inputTensor)[EA_H];
@@ -295,14 +361,14 @@ void MotionFilter::_initModelIO()
 	logger->info("Input C: {}", m_inputChannel);
 
 
-	// DROID_SLAM fnet input size, Alister add 2025-11-24
-	m_fnet_inputHeight 		= ea_tensor_shape(m_fnet_inputTensor)[EA_H];
-	m_fnet_inputWidth  		= ea_tensor_shape(m_fnet_inputTensor)[EA_W];
-	m_fnet_inputChannel 	= ea_tensor_shape(m_fnet_inputTensor)[EA_C];
-	logger->info("fnet Input H: {}", m_fnet_inputHeight);
-	logger->info("fnet Input W: {}", m_fnet_inputWidth);
-	logger->info("fnet Input C: {}", m_fnet_inputChannel);
-
+	// DROID-SLAM cnet, Alister modified 2025-11-24
+	m_cnet_inputTensor    = ea_net_input(m_cnet_model , m_cnet_inputTensorName.c_str());
+	logger->info("m_cnet_inputTensor ptr = {}", (void*)m_cnet_inputTensor);
+	if (!m_cnet_inputTensor) {
+		logger->error("ea_net_input returned NULL for cnet");
+		return;
+	}
+	logger->info("DROID-SLAM m_cnet_inputTensor finished");
 	// DROID_SLAM cnet input size, Alister add 2025-11-24
 	m_cnet_inputHeight 		= ea_tensor_shape(m_cnet_inputTensor)[EA_H];
 	m_cnet_inputWidth  		= ea_tensor_shape(m_cnet_inputTensor)[EA_W];
@@ -311,11 +377,30 @@ void MotionFilter::_initModelIO()
 	logger->info("cnet Input W: {}", m_cnet_inputWidth);
 	logger->info("cnet Input C: {}", m_cnet_inputChannel);
 
+	// DROID-SLAM fnet, Alister modified 2025-11-24
+	m_fnet_inputTensor    	= ea_net_input(m_fnet_model , m_fnet_inputTensorName.c_str());
+	logger->info("m_fnet_inputTensor ptr = {}", (void*)m_fnet_inputTensor);
+	if (!m_fnet_inputTensor) {
+		logger->error("ea_net_input returned NULL for cnet");
+		return;
+	}
+	logger->info("DROID-SLAM m_fnet_inputTensor finished");
+
+	// DROID_SLAM fnet input size, Alister add 2025-11-24
+	m_fnet_inputHeight 		= ea_tensor_shape(m_fnet_inputTensor)[EA_H];
+	m_fnet_inputWidth  		= ea_tensor_shape(m_fnet_inputTensor)[EA_W];
+	m_fnet_inputChannel 	= ea_tensor_shape(m_fnet_inputTensor)[EA_C];
+	logger->info("fnet Input H: {}", m_fnet_inputHeight);
+	logger->info("fnet Input W: {}", m_fnet_inputWidth);
+	logger->info("fnet Input C: {}", m_fnet_inputChannel);
+
+
+
 
 	// Get output tensors
 	// Create a buffer to store image data
 	logger->info("-------------------------------------------");
-	logger->info("Create Model Output Tensors");
+	logger->info("Create YOLOV8 Model Output Tensors");
 	m_outputTensors[0] = ea_net_output_by_index(m_model, 0);
 	m_outputTensors[1] = ea_net_output_by_index(m_model, 1);
 	m_outputTensors[2] = ea_net_output_by_index(m_model, 2);
@@ -327,12 +412,7 @@ void MotionFilter::_initModelIO()
 	m_outputTensors[6] = ea_net_output_by_index(m_model, 6);
 	m_outputTensors[7] = ea_net_output_by_index(m_model, 7);
 	m_outputTensors[8] = ea_net_output_by_index(m_model, 8);
-	m_outputTensors[9] = ea_net_output_by_index(m_model, 9);
-
-	// DROID_SLAM, Alister modified 2025-11-24
-	m_fnet_outputTensors[0]  = ea_net_output_by_index(m_fnet_model , 0);
-	m_cnet_outputTensors[0]  = ea_net_output_by_index(m_cnet_model , 0);
-	
+	m_outputTensors[9] = ea_net_output_by_index(m_model, 9);	
 
 	for (size_t i=0; i<ea_net_output_num(m_model); i++)
 	{
@@ -348,6 +428,50 @@ void MotionFilter::_initModelIO()
 		logger->info("Output Tensor Name: {}", tensorName);
 		logger->info("Output Tensor Shape: ({})", shapeStr);
 		logger->info("Output Tensor Size: {}", tensorSize);
+	}
+
+	// DROID_SLAM, Alister modified 2025-11-24
+	logger->info("-------------------------------------------");
+	logger->info("Create DROID-SLAM Model Output Tensors");
+	logger->info("-------------------------------------------");
+	logger->info("fnet Model Output Tensors");
+	logger->info("-------------------------------------------");
+	m_fnet_outputTensors[0]  = ea_net_output_by_index(m_fnet_model , 0);
+	for (size_t i=0; i<ea_net_output_num(m_fnet_model); i++)
+	{
+		const char* tensorName2 = static_cast<const char*>(ea_net_output_name(m_fnet_model, i));
+		const size_t* tensorShape2 = static_cast<const size_t*>(ea_tensor_shape(ea_net_output_by_index(m_fnet_model, i)));
+		size_t tensorSize2 = static_cast<size_t>(ea_tensor_size(ea_net_output_by_index(m_fnet_model, i)));
+		
+		std::string shapeStr2 = std::to_string(tensorShape2[0]) + "x" + 
+							   std::to_string(tensorShape2[1]) + "x" + 
+							   std::to_string(tensorShape2[2]) + "x" + 
+							   std::to_string(tensorShape2[3]);
+		
+		logger->info("Output Tensor Name: {}", tensorName2);
+		logger->info("Output Tensor Shape: ({})", shapeStr2);
+		logger->info("Output Tensor Size: {}", tensorSize2);
+	}
+
+	logger->info("-------------------------------------------");
+	logger->info("cnet Model Output Tensors");
+	logger->info("-------------------------------------------");
+	m_cnet_outputTensors[0]  = ea_net_output_by_index(m_cnet_model , 0);
+	m_cnet_outputTensors[1]  = ea_net_output_by_index(m_cnet_model , 1);
+	for (size_t i=0; i<ea_net_output_num(m_cnet_model); i++)
+	{
+		const char* tensorName3 = static_cast<const char*>(ea_net_output_name(m_cnet_model, i));
+		const size_t* tensorShape3 = static_cast<const size_t*>(ea_tensor_shape(ea_net_output_by_index(m_cnet_model, i)));
+		size_t tensorSize3 = static_cast<size_t>(ea_tensor_size(ea_net_output_by_index(m_cnet_model, i)));
+		
+		std::string shapeStr3 = std::to_string(tensorShape3[0]) + "x" + 
+							   std::to_string(tensorShape3[1]) + "x" + 
+							   std::to_string(tensorShape3[2]) + "x" + 
+							   std::to_string(tensorShape3[3]);
+		
+		logger->info("Output Tensor Name: {}", tensorName3);
+		logger->info("Output Tensor Shape: ({})", shapeStr3);
+		logger->info("Output Tensor Size: {}", tensorSize3);
 	}
 
 #endif
@@ -711,17 +835,21 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 	// 	logger->error("Load Input Data Failed");
 	// 	return false;
 	// }
+	
 	cv::Mat img = imgUtil::convertTensorToMat(imgTensor);
+	logger->info("[DROID-SLAM] convertTensorToMat finished");
 
 	// DROID-SLAM process one image of cv::Mat format, TODO: Alister add 2025-11-24
 	process_one_image(img, m_frameData);
+	logger->info("[DROID-SLAM] process_one_image finished");
 
 
 	// DROID-SLAM, convert cv::Mat into  ea_tensor* , Alister add 2025-11-24
-	cv::Mat processedImg =  m_frameData.image;	
-	ea_tensor_t* tensorImg = cvmat_to_ea_tensor(processedImg);
+	// cv::Mat processedImg =  m_frameData.image;	
+	// ea_tensor_t* tensorImg = cvmat_to_ea_tensor(processedImg);
+	// logger->info("[DROID-SLAM] cvmat_to_ea_tensor finished");
 
-	if (!_loadInput(tensorImg))
+	if (!_loadInput(imgTensor))
 	{
 		logger->error("Load Input Data Failed");
 		return false;
