@@ -44,6 +44,8 @@ extern "C" {
 
 // constexpr int MODEL_HEIGHT     = 288;
 // constexpr int MODEL_WIDTH      = 512;
+// constexpr int VSLAM_MODEL_HEIGHT     = 384;
+// constexpr int VSLAM_MODEL_WIDTH      = 512;
 // constexpr int FRAME_HEIGHT     = 288;
 // constexpr int FRAME_WIDTH      = 512;
 // constexpr int NUM_OBJ_CLASSES  = 2;
@@ -157,6 +159,9 @@ private:
     int m_inputHeight     = 0;
     int m_inputWidth      = 0;
     std::string m_inputTensorName = "images";
+
+    std::string m_fnet_inputTensorName = "images";
+    std::string m_cnet_inputTensorName = "images";
 
     // DROID-SLAM I/O information, Alister add 2025-11-24
     // fnet I/O
