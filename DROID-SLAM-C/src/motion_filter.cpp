@@ -660,9 +660,9 @@ bool MotionFilter::_saveOutputTensor(int frameIdx)
 	std::string poseKptsFilePath     = m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor9.bin";
 
 	// DROID-SLAM, Alister add 2025-11-24
-	std::string netFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor0.bin";
-	std::string inpFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor1.bin";
-	std::string gmapFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor2.bin";
+	std::string netFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor10.bin";
+	std::string inpFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor11.bin";
+	std::string gmapFilePath      	= m_tensorPath + "/frame_" + std::to_string(frameIdx-1) + "_tensor12.bin";
 
 
 
@@ -906,67 +906,6 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 		if (m_estimateTime)
 			time_1 = std::chrono::high_resolution_clock::now();
 
-
-		// DROID-SLAM: run inference using Ambarella's eazyai library
-		// fnet
-		if (EA_SUCCESS != ea_net_forward(m_fnet_model, 1))
-		{	
-			// TODO, this is not correct
-			_releaseInputTensor();
-			_releaseOutputTensor();
-			_releaseTensorBuffers();
-			_releaseModel();
-		}
-		else{
-			// DROID-SLAM
-			// Sync output tensors between VP and CPU
-#if defined(CV28)
-			rval = ea_tensor_sync_cache(m_fnet_outputTensors[0], EA_VP, EA_CPU);
-			if (rval != EA_SUCCESS)
-			{
-				logger->error("Failed to sync output tensor 0");
-			}
-#endif
-			m_fnet_outputTensors[0]	= ea_net_output_by_index(m_fnet_model, 0);
-			// Allocate memory for all output tensors
-			m_slam_pred.gmapBuff   = new float[m_gmapBufferSize]; 
-			// Copy output tensors to prediction buffers
-			std::memcpy(m_slam_pred.gmapBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[0]), m_gmapBufferSize * sizeof(float));
-		}
-		
-		// cnet
-		if (EA_SUCCESS != ea_net_forward(m_cnet_model, 1))
-		{	
-			// TODO, this is not correct
-			_releaseInputTensor();
-			_releaseOutputTensor();
-			_releaseTensorBuffers();
-			_releaseModel();
-		}
-		else // DROID-SLAM, Alister add 2025-11-24
-		{
-#if defined(CV28)
-			rval = ea_tensor_sync_cache(m_cnet_outputTensors[0], EA_VP, EA_CPU);
-			if (rval != EA_SUCCESS)
-			{
-				logger->error("Failed to sync output tensor 0");
-			}
-			rval = ea_tensor_sync_cache(m_cnet_outputTensors[1], EA_VP, EA_CPU);
-			if (rval != EA_SUCCESS)
-			{
-				logger->error("Failed to sync output tensor 1");
-			}
-#endif
-			m_cnet_outputTensors[0]	= ea_net_output_by_index(m_cnet_model, 0);
-			m_cnet_outputTensors[1]	= ea_net_output_by_index(m_cnet_model, 1);
-			// Allocate memory for all output tensors
-			m_slam_pred.netBuff   = new float[m_netBufferSize]; 
-			m_slam_pred.inpBuff   = new float[m_inpBufferSize]; 
-			// Copy output tensors to prediction buffers
-			std::memcpy(m_slam_pred.netBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[0]), m_netBufferSize * sizeof(float));
-			std::memcpy(m_slam_pred.inpBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[1]), m_inpBufferSize * sizeof(float));
-		}
-
 		if (EA_SUCCESS != ea_net_forward(m_model, 1))
 		{
 			_releaseInputTensor();
@@ -975,7 +914,8 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 			_releaseModel();
 		}
 		else
-		{
+		{	logger->info("----------------------------------------------------------------");
+			logger->info("ea_net_forward m_model finished");
 			// TODO: Not implemented yet
 			// if (m_saveRawImage || m_visualMode == 0)
 			// {
@@ -1086,6 +1026,80 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 			std::memcpy(m_pred.poseConfBuff,  (float *)ea_tensor_data(m_outputTensors[7]), m_confBufferSize * sizeof(float));
 			std::memcpy(m_pred.poseClsBuff,   (float *)ea_tensor_data(m_outputTensors[8]), m_classBufferSize * sizeof(float));
 			std::memcpy(m_pred.poseKptsBuff,  (float *)ea_tensor_data(m_outputTensors[9]), m_kptsBufferSize * sizeof(float));
+			logger->info("memcpy m_pred.xxxBuff (YOLOV8) finished");
+
+		// DROID-SLAM: run inference using Ambarella's eazyai library
+		// fnet
+		if (EA_SUCCESS != ea_net_forward(m_fnet_model, 1))
+		{	
+			// TODO, this is not correct
+			// _releaseInputTensor();
+			// _releaseOutputTensor();
+			// _releaseTensorBuffers();
+			// _releaseModel();
+		}
+		else{
+			logger->info("----------------------------------------------------------------");
+			logger->info("ea_net_forward m_fnet_model finished");
+			// DROID-SLAM
+			// Sync output tensors between VP and CPU
+#if defined(CV28)
+			rval = ea_tensor_sync_cache(m_fnet_outputTensors[0], EA_VP, EA_CPU);
+			if (rval != EA_SUCCESS)
+			{
+				logger->error("Failed to sync output tensor 0");
+			}
+#endif
+			m_fnet_outputTensors[0]	= ea_net_output_by_index(m_fnet_model, 0);
+			// Allocate memory for all output tensors
+			m_slam_pred.gmapBuff   = new float[m_gmapBufferSize]; 
+			// Copy output tensors to prediction buffers
+			std::memcpy(m_slam_pred.gmapBuff,   (float *)ea_tensor_data(m_fnet_outputTensors[0]), m_gmapBufferSize * sizeof(float));
+
+			logger->info("memcpy m_slam_pred.gmapBuff finished");
+		}
+		
+		// cnet
+		if (EA_SUCCESS != ea_net_forward(m_cnet_model, 1))
+		{	
+			// TODO, this is not correct
+			// _releaseInputTensor();
+			// _releaseOutputTensor();
+			// _releaseTensorBuffers();
+			// _releaseModel();
+			logger->error("ea_net_forward m_cnet_model failed");
+		}
+		else // DROID-SLAM, Alister add 2025-11-24
+		{	
+			logger->info("----------------------------------------------------------------");
+			logger->info("ea_net_forward m_cnet_model finished");
+#if defined(CV28)
+			rval = ea_tensor_sync_cache(m_cnet_outputTensors[0], EA_VP, EA_CPU);
+			if (rval != EA_SUCCESS)
+			{
+				logger->error("Failed to sync output tensor 0");
+			}
+			else{
+				logger->info("ea_tensor_sync_cache cnet tensor 0 finished");
+			}
+			rval = ea_tensor_sync_cache(m_cnet_outputTensors[1], EA_VP, EA_CPU);
+			if (rval != EA_SUCCESS)
+			{
+				logger->error("Failed to sync output tensor 1");
+			}else{
+				logger->info("ea_tensor_sync_cache cnet tensor 1 finished");
+			}
+#endif
+			m_cnet_outputTensors[0]	= ea_net_output_by_index(m_cnet_model, 0);
+			m_cnet_outputTensors[1]	= ea_net_output_by_index(m_cnet_model, 1);
+			// Allocate memory for all output tensors
+			m_slam_pred.netBuff   = new float[m_netBufferSize]; 
+			m_slam_pred.inpBuff   = new float[m_inpBufferSize]; 
+			// Copy output tensors to prediction buffers
+			std::memcpy(m_slam_pred.netBuff,   (float *)ea_tensor_data(m_cnet_outputTensors[0]), m_netBufferSize * sizeof(float));
+			std::memcpy(m_slam_pred.inpBuff,   (float *)ea_tensor_data(m_cnet_outputTensors[1]), m_inpBufferSize * sizeof(float));
+			logger->info("memcpy m_slam_pred.netBuff & m_slam_pred.inpBuff finished");
+		}
 
 #if defined(SAVE_OUTPUT_TENSOR)
 			_saveOutputTensor(frameIdx);
@@ -1097,17 +1111,19 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 	m_pred.img = img;	
 	std::pair<int, YOLOv8_Prediction> pair = std::make_pair(frameIdx, m_pred);
 	m_predictionBuffer.push_back(pair);
+	logger->info("m_predictionBuffer push back pair finished");
 
 	// DROID-SLAM, Alister add 2025-11-24
-	m_slam_pred.img = m_frameData.image;
-	m_slam_pred.intrinsics = m_frameData.intr;
-	m_slam_pred.ht = m_frameData.h;
-	m_slam_pred.wd = m_frameData.w;
-	// DROID-SLAM initialize more paramter, Alister add 2025-11-24
-	// TODO, add intrinsic, tstamp, index, dsip, disp_sen, etc.
+	// m_slam_pred.img = m_frameData.image;
+	// m_slam_pred.intrinsics = m_frameData.intr;
+	// m_slam_pred.ht = m_frameData.h;
+	// m_slam_pred.wd = m_frameData.w;
+	// // DROID-SLAM initialize more paramter, Alister add 2025-11-24
+	// // TODO, add intrinsic, tstamp, index, dsip, disp_sen, etc.
 
 	std::pair<int, DROID_SLAM_Prediction> slam_pair = std::make_pair(frameIdx, m_slam_pred);
 	m_slam_predictionBuffer.push_back(slam_pair);
+	logger->info("m_slam_predictionBuffer push back slam_pair finished");
 
 	pred_lock.unlock();
 	m_bProcessed = true;
