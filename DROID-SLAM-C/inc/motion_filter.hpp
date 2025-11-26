@@ -44,8 +44,8 @@ extern "C" {
 
 // constexpr int MODEL_HEIGHT     = 288;
 // constexpr int MODEL_WIDTH      = 512;
-// constexpr int VSLAM_MODEL_HEIGHT     = 384;
-// constexpr int VSLAM_MODEL_WIDTH      = 512;
+constexpr int VSLAM_MODEL_HEIGHT     = 384;
+constexpr int VSLAM_MODEL_WIDTH      = 512;
 // constexpr int FRAME_HEIGHT     = 288;
 // constexpr int FRAME_WIDTH      = 512;
 // constexpr int NUM_OBJ_CLASSES  = 2;
@@ -106,7 +106,8 @@ public:
 
 
 #if defined(CV28) || defined(CV28_SIMULATOR)
-    ea_tensor_t* cvmat_to_ea_tensor(const cv::Mat& img);
+    ea_tensor_t* cvmat_to_ea_tensor(const cv::Mat& img, ea_tensor_t* like_tensor);
+    ea_tensor_t* nhwc_to_nchw(ea_tensor_t* nhwc_tensor);
 #endif
 
 private:

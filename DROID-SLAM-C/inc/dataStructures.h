@@ -113,37 +113,27 @@ struct DROID_SLAM_Prediction
     float*  inpBuff; // 128 * H/8 * W/8
     float*  gmapBuff; // 128 * H/8 * W/8
     int     tstamp; 
-
     cv::Mat img;
-
     int index = -1; // frame index
     double timestamp = 0.0; // timestamp (seconds)
-
     int ht = 384; // image height
     int wd = 512; // image width
-
     bool dirty = false;
     bool red = false;
-
     // pose: [tx,ty,tz,qx,qy,qz,qw]
     std::array<float,7> pose = {0,0,0, 0,0,0,1};
-
     // disparity maps
     float* disps; // H/8 * W/8
     float* disps_sens; // H/8 * W/8
     float* disps_up; // H * W
     // intrinsics: fx, fy, cx, cy
-    std::array<float,4> intrinsics = {0,0,0,0};
-
+    std::array<float,4> intrinsics = {0,0,0,0}; 
     bool stereo = false;
-
-
     void allocate_sizes(int H, int W, bool is_stereo=false) {
         ht = H; wd = W; stereo = is_stereo;
         int dh = ht/8; int dw = wd/8;
         int c = stereo ? 2 : 1;
     }
-
     DROID_SLAM_Prediction()
         : isProcessed(false),
         netBuff(nullptr),
