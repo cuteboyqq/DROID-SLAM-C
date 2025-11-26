@@ -21,9 +21,9 @@ MotionFilter::MotionFilter(Config_S *config, WakeCallback wakeFunc)
       m_classBufferSize(m_numAnchorBox),
 	  m_kptsBufferSize(m_numKeypoints * 3 * m_numAnchorBox),
       m_estimateTime(config->stShowProcTimeConfig.AIModel),
-	  m_netBufferSize(1 * 128 * (384 / 8) * (512 / 8)), // DROID_SLAM
-	  m_inpBufferSize(1 * 128 * (384 / 8) * (512 / 8)), // DROID_SLAM
-	  m_gmapBufferSize(1 * 128 * (384 / 8) * (512 / 8)) // DROID_SLAM
+	  m_netBufferSize(1 * 128 * (VSLAM_MODEL_HEIGHT / 8) * (VSLAM_MODEL_WIDTH / 8)), // DROID_SLAM
+	  m_inpBufferSize(1 * 128 * (VSLAM_MODEL_HEIGHT / 8) * (VSLAM_MODEL_WIDTH / 8)), // DROID_SLAM
+	  m_gmapBufferSize(1 * 128 * (VSLAM_MODEL_HEIGHT / 8) * (VSLAM_MODEL_WIDTH / 8)) // DROID_SLAM
 
 {
 #ifdef SPDLOG_USE_SYSLOG
@@ -550,10 +550,17 @@ bool MotionFilter::process_one_image(
         float(cx * (float(w1) / w0)),
         float(cy * (float(h1) / h0))
     };
+	//   outFrame.intr = {
+    //     float(fx * 1.0),
+    //     float(fy * 1.0),
+    //     float(cx * 1.0),
+    //     float(cy * 1.0)
+    // };
+
 
     outFrame.image = image;
-    outFrame.h = h1;
-    outFrame.w = w1;
+    outFrame.h = h0;//h1;
+    outFrame.w = w0;//w1;
 
     return true;
 }
@@ -711,6 +718,15 @@ bool MotionFilter::_releaseInputTensor()
 	{
 		m_inputTensor = nullptr;
 	}
+	// DROID-SLAM
+	if(m_fnet_inputTensor)
+	{
+		m_fnet_inputTensor = nullptr;
+	}
+	if(m_cnet_inputTensor)
+	{
+		m_cnet_inputTensor = nullptr;
+	}
 	return true;
 }
 
@@ -771,26 +787,147 @@ bool MotionFilter::_releaseTensorBuffers()
 
 
 
-ea_tensor_t* MotionFilter::cvmat_to_ea_tensor(const cv::Mat& img)
+// ea_tensor_t* MotionFilter::cvmat_to_ea_tensor(const cv::Mat& img)
+// {
+//     auto logger = spdlog::get("yolov8");
+
+//     if (img.empty()) {
+//         logger->error("cvmat_to_ea_tensor: input cv::Mat is empty");
+//         return nullptr;
+//     }
+
+//     int H = img.rows;
+//     int W = img.cols;
+//     int C = img.channels();   // should be 3
+
+//     // EA API expects NHWC (batch=1)
+//     size_t shape[4] = {1, (size_t)H, (size_t)W, (size_t)C};
+// 	// size_t shape[4] = {1, (size_t)C, (size_t)H, (size_t)W};
+//     ea_tensor_t* tensor = ea_tensor_new(EA_U8, shape, 4);
+//     if (!tensor) {
+//         logger->error("cvmat_to_ea_tensor: ea_tensor_new returned nullptr (H={},W={},C={})",
+//                       H, W, C);
+//         return nullptr;
+//     }
+// 	// ea_tensor_t* tensor_nchw = nhwc_to_nchw(tensor);
+
+// 	// ea_tensor_data() gives pointer to buffer
+//     uint8_t* dst = (uint8_t*)ea_tensor_data(tensor);
+//     if (!dst) {
+//         logger->error("cvmat_to_ea_tensor: ea_tensor_data returned nullptr");
+//         ea_tensor_free(tensor);
+//         return nullptr;
+//     }
+
+//     size_t bytes = img.total() * img.elemSize();
+
+//     // Perform full tensor copy
+//     memcpy(dst, img.data, bytes);
+//     // -----------------------------------------
+
+//     logger->info("cvmat_to_ea_tensor: created tensor 1x{}x{}x{} (NHWC), bytes={}",
+//                   H, W, C, bytes);
+
+//     return tensor;
+// }
+
+
+
+ea_tensor_t* MotionFilter::cvmat_to_ea_tensor(const cv::Mat& img,
+                                              ea_tensor_t* like_tensor)
 {
-    int H = img.rows;
-    int W = img.cols;
-    int C = img.channels();
+    auto logger = spdlog::get("yolov8");
 
-    // EA wants size_t for shape array
-    size_t shape[3] = { (size_t)W, (size_t)H, (size_t)C };
+    if (!like_tensor) {
+        logger->error("cvmat_to_ea_tensor: like_tensor is NULL");
+        return nullptr;
+    }
+    if (img.empty()) {
+        logger->error("cvmat_to_ea_tensor: img empty");
+        return nullptr;
+    }
 
-    // dtype = EA_U8
-    // shape = pointer to size_t array
-    // pitch = 0 (default, contiguous)
-    ea_tensor_t* tensor = ea_tensor_new(EA_U8, shape, 0);
+    // Create output tensor using shape/alloc from like_tensor
+    ea_tensor_t* out = ea_tensor_new_from_other(like_tensor, 0);
+    if (!out) {
+        logger->error("cvmat_to_ea_tensor: ea_tensor_new_from_other failed");
+        return nullptr;
+    }
 
-    // Copy image data
-    uint8_t* dst = (uint8_t*)ea_tensor_data(tensor);
-    std::memcpy(dst, img.data, img.total() * img.elemSize());
+    const size_t* s = ea_tensor_shape(out);
+    int C = s[1];
+    int H = s[2];
+    int W = s[3];
 
-    return tensor;
+    if (C != 3) {
+        logger->error("cvmat_to_ea_tensor: like_tensor must have C=3");
+        ea_tensor_free(out);
+        return nullptr;
+    }
+
+    // Resize cv::Mat to match EA tensor size
+    cv::Mat resized;
+    cv::resize(img, resized, cv::Size(W, H));
+
+    // Convert BGR->RGB if needed
+    cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+
+    // Copy into EA tensor (NCHW)
+    uint8_t* dst = (uint8_t*)ea_tensor_data(out);
+    const uint8_t* src = resized.data;
+
+    for (int h = 0; h < H; h++)
+        for (int w = 0; w < W; w++)
+            for (int c = 0; c < 3; c++)
+                dst[c*H*W + h*W + w] = src[(h*W + w)*3 + c];
+
+    return out;
 }
+
+
+ea_tensor_t* MotionFilter::nhwc_to_nchw(ea_tensor_t* nhwc_tensor)
+{
+    auto logger = spdlog::get("yolov8");
+
+    if (!nhwc_tensor) {
+        logger->error("nhwc_to_nchw: input is NULL");
+        return nullptr;
+    }
+
+    const size_t* s = ea_tensor_shape(nhwc_tensor);
+    size_t N = s[0];
+    size_t H = s[1];
+    size_t W = s[2];
+    size_t C = s[3];
+
+    size_t shape_nchw[4] = {N, C, H, W};
+    ea_tensor_t* nchw_tensor = ea_tensor_new(EA_U8, shape_nchw, 4);
+
+    if (!nchw_tensor) {
+        logger->error("nhwc_to_nchw: ea_tensor_new(NCHW) returned NULL");
+        return nullptr;
+    }
+
+    uint8_t* src = static_cast<uint8_t*>(ea_tensor_data(nhwc_tensor));
+    uint8_t* dst = static_cast<uint8_t*>(ea_tensor_data(nchw_tensor));
+
+    if (!src) { logger->error("nhwc_to_nchw: src NULL"); return nullptr; }
+    if (!dst) { logger->error("nhwc_to_nchw: dst NULL"); return nullptr; }
+
+    // reorder
+    for (size_t h = 0; h < H; h++)
+        for (size_t w = 0; w < W; w++)
+            for (size_t c = 0; c < C; c++)
+            {
+                size_t nhwc_idx = (h * W + w) * C + c;
+                size_t nchw_idx = (c * H + h) * W + w;
+                dst[nchw_idx] = src[nhwc_idx];
+            }
+
+    return nchw_tensor;
+}
+
+
 
 
 // =================================================================================================
@@ -845,11 +982,48 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 
 
 	// DROID-SLAM, convert cv::Mat into  ea_tensor* , Alister add 2025-11-24
-	// cv::Mat processedImg =  m_frameData.image;	
-	// ea_tensor_t* tensorImg = cvmat_to_ea_tensor(processedImg);
-	// logger->info("[DROID-SLAM] cvmat_to_ea_tensor finished");
+	cv::Mat processedImg =  m_frameData.image;
+	std::cout << "processedImg shape: "
+          << processedImg.rows << " x "
+          << processedImg.cols << " x "
+          << processedImg.channels()
+          << std::endl;
 
-	if (!_loadInput(imgTensor))
+	std::cout << "size = " << processedImg.size() 
+          << ", channels = " << processedImg.channels() 
+          << std::endl;
+
+	ea_tensor_t* tensorImg = cvmat_to_ea_tensor(processedImg, m_fnet_inputTensor);
+	logger->info("[DROID-SLAM] cvmat_to_ea_tensor finished");
+
+
+	//---------------------------------------
+	auto print_shape = [&](const char* name, ea_tensor_t* t)
+	{
+		if (!t) {
+			spdlog::get("yolov8")->error("{} is NULL", name);
+			return;
+		}
+
+		size_t nd = 4; // ea_tensor_ndim(t);
+		const size_t* s = ea_tensor_shape(t);
+
+		std::string ss;
+		for (size_t i = 0; i < nd; i++) {
+			ss += std::to_string(s[i]) + " ";
+		}
+
+		spdlog::get("yolov8")->info("{} shape: ndim={}, shape=[{}]", name, nd, ss);
+	};
+	//---------------------------------------
+	print_shape("imgTensor (source)", imgTensor);
+	print_shape("tensorImg (source)", tensorImg);
+	print_shape("m_inputTensor", m_inputTensor);
+	print_shape("m_fnet_inputTensor", m_fnet_inputTensor);
+	print_shape("m_cnet_inputTensor", m_cnet_inputTensor);
+
+
+	if (!_loadInput(tensorImg))
 	{
 		logger->error("Load Input Data Failed");
 		return false;
@@ -1114,10 +1288,10 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 	logger->info("m_predictionBuffer push back pair finished");
 
 	// DROID-SLAM, Alister add 2025-11-24
-	// m_slam_pred.img = m_frameData.image;
-	// m_slam_pred.intrinsics = m_frameData.intr;
-	// m_slam_pred.ht = m_frameData.h;
-	// m_slam_pred.wd = m_frameData.w;
+	m_slam_pred.img = m_frameData.image;
+	m_slam_pred.intrinsics = m_frameData.intr;
+	m_slam_pred.ht = m_frameData.h;
+	m_slam_pred.wd = m_frameData.w;
 	// // DROID-SLAM initialize more paramter, Alister add 2025-11-24
 	// // TODO, add intrinsic, tstamp, index, dsip, disp_sen, etc.
 
@@ -1339,6 +1513,7 @@ bool MotionFilter::_loadInput(ea_tensor_t* imgTensor)
 																: std::chrono::time_point<std::chrono::high_resolution_clock>{};
 	auto time_1 = std::chrono::time_point<std::chrono::high_resolution_clock>{};
 
+
 	// Preprocessing
 	if (_preProcessingMemory(imgTensor) != EA_SUCCESS)
 	{
@@ -1389,6 +1564,15 @@ int MotionFilter::_preProcessingMemory(ea_tensor_t* imgTensor)
 	unsigned long start_time = 0;
 	unsigned long preprocess_time = 0;
 
+	// Example check (do this before calling ea_cvt_color_resize)
+	if (!m_fnet_inputTensor) {
+		logger->error("m_fnet_inputTensor is null");
+		// handle allocation or fail early
+	}
+	if (!m_cnet_inputTensor) {
+		logger->error("m_cnet_inputTensor is null");
+	}
+
 	start_time = ea_gettime_us();
 	if (m_inputMode == DETECTION_MODE_FILE)
 	{
@@ -1401,7 +1585,17 @@ int MotionFilter::_preProcessingMemory(ea_tensor_t* imgTensor)
 		rval = ea_cvt_color_resize(imgTensor, m_inputTensor, EA_COLOR_BGR2RGB, EA_CPU);
 		// DROID-SLAM inputTensor, Alister add 2025-11-24
 		rval = ea_cvt_color_resize(imgTensor, m_fnet_inputTensor, EA_COLOR_BGR2RGB, EA_CPU);
+		logger->info("ea_cvt_color_resize -> m_fnet_inputTensor returned {}", rval);
+		if (rval != EA_SUCCESS) {
+			logger->error("ea_cvt_color_resize failed for fnet (rval={})", rval);
+			// maybe free tensorImg and return false
+		}
 		rval = ea_cvt_color_resize(imgTensor, m_cnet_inputTensor, EA_COLOR_BGR2RGB, EA_CPU);
+		logger->info("ea_cvt_color_resize -> m_cnet_inputTensor returned {}", rval);
+		if (rval != EA_SUCCESS) {
+			logger->error("ea_cvt_color_resize failed for cnet (rval={})", rval);
+			// maybe free tensorImg and return false
+		}
 #endif
 	}
 	else
@@ -1419,7 +1613,8 @@ int MotionFilter::_preProcessingMemory(ea_tensor_t* imgTensor)
 #endif
 	}
 	preprocess_time = ea_gettime_us() - start_time;
-	logger->info("Preprocess time: {} us", preprocess_time);
+
+	logger->info("Preprocess ea_cvt_color_resize time: {} us", preprocess_time);
 
 	return rval;
 }
