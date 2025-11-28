@@ -106,7 +106,8 @@ typedef struct
     // DROID-SLAM
     std::string fnetModelPath;
     std::string cnetModelPath;
-    
+    std::string updateModelPath;
+
     // DROID-SLAM Calibration
     std::string calibPath;
 

@@ -15,9 +15,16 @@
 #define __DATA_STRUCTURES__
 
 #include <vector>
+#include <cstring>
 #include <map>
 #include <opencv2/core.hpp>
 #include <opencv2/opencv.hpp>
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <unordered_set>
+
+
 
 #include "bounding_box.hpp"
 #include "object.hpp"
@@ -97,6 +104,8 @@ struct YOLOv8_Prediction
     }
 };
 
+
+
 // Maybe this can combine into DROID_SLAM_Prediction : TODO, Alister add 2025-11-24
 struct FrameData {
     cv::Mat image;           // CHW float32 (3 x H x W collapsed to 2D)
@@ -109,9 +118,9 @@ struct FrameData {
 struct DROID_SLAM_Prediction
 {
     bool    isProcessed = false;
-    float*  netBuff; // C * 128 * H/8 * W/8
-    float*  inpBuff; // 128 * H/8 * W/8
-    float*  gmapBuff; // 128 * H/8 * W/8
+    float*  netBuff; // 1 * 128 * H/8 * W/8
+    float*  inpBuff; // 1 * 128 * H/8 * W/8
+    float*  gmapBuff; // 1 * 128 * H/8 * W/8
     int     tstamp; 
     cv::Mat img;
     int index = -1; // frame index

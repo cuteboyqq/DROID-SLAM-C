@@ -59,11 +59,16 @@ std::shared_ptr<spdlog::logger> WNC_APP::_initializeLogger()
 }
 
 void WNC_APP::_initializeConfig(const std::string& configPath, std::shared_ptr<spdlog::logger>& logger)
-{
+{   
+    printf("Start new Config_S();");
     m_config           = new Config_S();
+    printf("finished new Config_S();");
     m_appConfigReader  = new AppConfigReader();
+    printf("finished new AppConfigReader();");
     m_appConfigReader->read(configPath);
+    printf("finished m_appConfigReader->read(configPath);");
     m_config = m_appConfigReader->getConfig();
+    printf("finished m_appConfigReader->getConfig();");
     m_logger->set_level(m_config->stDebugConfig.App ? spdlog::level::debug : spdlog::level::info);
 
     _checkPaths(m_logger);
@@ -109,10 +114,13 @@ void WNC_APP::_initializeModules(std::shared_ptr<spdlog::logger>& logger, std::s
     m_thresholdFps = m_config->procFrameRate / m_config->procFrameStep;  // 1 seconds long
 
     // YOLOv8
-    m_yolov8 = new YOLOv8(m_config, [this]() { this->wakeProcessingThread(); });
+    // m_yolov8 = new YOLOv8(m_config, [this]() { this->wakeProcessingThread(); });
     m_yolov8PostProc =
         new YOLOv8_POSTPROC(m_config, [this]() { this->wakeProcessingThread(); });
     m_logger->debug("Initialized Post Processing module");
+
+    // DROID-SLAM, Alister add 2025-11-24
+    m_motionFilter = new MotionFilter(m_config, [this]() { this->wakeProcessingThread(); });
 
     // Tracking ROI
     _initTrackingROI();
@@ -188,9 +196,12 @@ void WNC_APP::_startThreads()
     // if (m_config->stDebugConfig.saveRawImages)
     //     _startHistoricalFeedThread();
 
-    m_yolov8->runThread();
-    m_yolov8PostProc->runThread();
+    //m_yolov8->runThread();
+    // DROID-SLAM, Alister add 2025-11-24
+    m_motionFilter->runThread();
 
+    m_yolov8PostProc->runThread();
+    
     if (m_config->HistoricalFeedModeConfig.visualizeMode == 0 ||
         m_config->HistoricalFeedModeConfig.visualizeMode == 1)
     {
@@ -223,7 +234,8 @@ void WNC_APP::_createTensorDirectories(std::string inputFile) {
     
     if (utils::createDirectories(fullPath)) {
         m_logger->debug("Created directory chain: {}", fullPath);
-        m_yolov8->updateTensorPath(fullPath); // Update the path in the YOLO ADAS module
+        // m_yolov8->updateTensorPath(fullPath); // Update the path in the YOLO ADAS module
+        m_motionFilter->updateTensorPath(fullPath);
     } else {
         m_logger->error("Failed to create directory chain: {}", fullPath);
     }
@@ -232,15 +244,20 @@ void WNC_APP::_createTensorDirectories(std::string inputFile) {
 void WNC_APP::_init(std::string configPath, std::string inputFile)
 {
     m_logger = _initializeLogger();
-
+    m_logger->info("Finished _initializeLogger");
     // Get Date Time
     utils::getDateTime(m_dbg_dateTime);
-
+    m_logger->info("Finished getDateTime");
     _initializeConfig(configPath, m_logger);
+    m_logger->info("Finished _initializeConfig");
     _initializeModules(m_logger, inputFile);
+    m_logger->info("Finished _initializeModules");
     _setupDebugAndDisplayConfigs();
+    m_logger->info("Finished _setupDebugAndDisplayConfigs");
     _createTensorDirectories(inputFile);
+    m_logger->info("Finished _createTensorDirectories");
     _startThreads();
+    m_logger->info("Finished _startThreads");
     m_logger->info("Finished Init");
 }
 
@@ -299,7 +316,7 @@ WNC_APP::~WNC_APP()
 
     delete m_appConfigReader;
     delete m_config;
-    delete m_yolov8;
+    // delete m_yolov8;
     delete m_yolov8PostProc;
     delete m_humanTracker;
     delete m_vehicleTracker;
@@ -308,7 +325,8 @@ WNC_APP::~WNC_APP()
 
     m_appConfigReader   = nullptr;
     m_config            = nullptr;
-    m_yolov8            = nullptr;
+    // m_yolov8            = nullptr;
+    m_motionFilter      = nullptr; // DROID-SLAM
     m_yolov8PostProc    = nullptr;
     m_humanTracker      = nullptr;
     m_vehicleTracker    = nullptr;
@@ -318,10 +336,17 @@ WNC_APP::~WNC_APP()
 
 void WNC_APP::stopThread()
 {
-    if (!m_yolov8->m_threadTerminated)
+    // if (!m_yolov8->m_threadTerminated)
+    // {
+    //     m_yolov8->stopThread();
+    // }
+    // DROID-SLAM, Alister add 2025-11-24
+    if (!m_motionFilter->m_threadTerminated)
     {
-        m_yolov8->stopThread();
+        m_motionFilter->stopThread();
     }
+
+
 
     if (!m_yolov8PostProc->m_threadTerminated)
     {
@@ -340,7 +365,7 @@ void WNC_APP::updateInput(ea_tensor_t* imgTensor)
     bool bufferCondition = false;
     int  frameStep       = m_frameStep_wnc;
 
-    bufferCondition = m_yolov8->m_inputFrameBuffer.size() >= 2;
+    bufferCondition = m_motionFilter->m_inputFrameBuffer.size() >= 2; // DROID-SLAM
 
     // Skip if no image saving and frame skipping condition is not met
     bool skipFrame = (++m_frameNum % frameStep != 0);
@@ -395,7 +420,8 @@ void WNC_APP::updateInput(ea_tensor_t* imgTensor)
     updateFrameIndex(); // Update frame index
 
     // Update input frame (tensor)
-    m_yolov8->updateInputFrame(imgTensor, m_frameIdx_wnc);
+    // m_yolov8->updateInputFrame(imgTensor, m_frameIdx_wnc);
+    m_motionFilter->updateInputFrame(imgTensor, m_frameIdx_wnc); // DROID-SLAM
 
     // Run AI process
     wakeProcessingThread();
@@ -562,7 +588,7 @@ int WNC_APP::appProcess(cv::Mat& resultMat)
 
     // Get last prediction
     YOLOv8_Prediction pred;
-    if (m_yolov8->getLastestPrediction(pred, predFrameIdx))
+    if (m_motionFilter->getLastestPrediction(pred, predFrameIdx))
     {
         m_yolov8PostProc->updatePredictionBuffer(pred, predFrameIdx);
     }
@@ -649,6 +675,113 @@ int WNC_APP::appProcess(cv::Mat& resultMat)
 }
 
 
+
+// int WNC_APP::appProcess(cv::Mat& resultMat)
+// {
+//     auto logger = spdlog::get(
+//     #ifdef SPDLOG_USE_SYSLOG
+//             "app-output"
+//     #else
+//             "JSON"
+//     #endif
+//             );
+//     int         success = APP_FAILURE;
+//     int         predFrameIdx;
+//     std::string server_ip   = m_config->HistoricalFeedModeConfig.serverIP;
+//     int         server_port = m_config->HistoricalFeedModeConfig.serverPort;
+
+//     auto time_0 = m_estimateTime ? std::chrono::high_resolution_clock::now()
+//                                  : std::chrono::time_point<std::chrono::high_resolution_clock>{};
+
+//     // Get last prediction
+//     YOLOv8_Prediction pred;
+//     if (m_yolov8->getLastestPrediction(pred, predFrameIdx))
+//     {
+//         m_yolov8PostProc->updatePredictionBuffer(pred, predFrameIdx);
+//     }
+//     if (m_yolov8PostProc->getLastestResult(m_procResult, m_resultFrameIdx))
+//     {   
+
+//         if (m_frameProcessedCallback)
+//         {
+//             m_frameProcessedCallback();
+//         }
+
+//         // Get m_resultImage from m_procResult
+//         m_resultImage = m_procResult.img;
+
+//         // Update m_displayImg following m_resultImage
+//         m_displayImg = m_resultImage.clone();
+
+//         bool isForCalibrationAI = false;
+//         success = _objectDetection() && _objectTracking() // && _poseDetection()
+//                       ? APP_SUCCESS
+//                       : APP_FAILURE;
+
+//         if (success == APP_FAILURE)
+//             m_logger->warn("One or more of App sub-tasks failed");
+
+//         _showDetectionResults();
+
+//         if (m_dsp_results && success == APP_SUCCESS)
+//         {
+//             cv::resize(m_procResult.img, m_displayImg, cv::Size(m_frameWidth, m_frameHeight), cv::INTER_LINEAR);
+//             _drawResults();
+//             if (m_dbg_saveImages)
+//                 _saveDrawResults();
+//         }
+
+//         _getResultImage(resultMat);
+//         _updateDebugProfile();
+
+
+//         // // TODO:
+//         std::string jsonLog = m_jsonLog->logInfo(
+//             m_result_log, m_humanBBoxList, m_vehicleBBoxList,
+//             m_trackedObjList, m_resultFrameIdx,m_debugProfile,
+//             APP_VERSION);
+        
+//         // cout<<jsonLog<<endl;
+
+//         _updateAppResult(); //TODO:
+
+//         WNC_APP_Results res;
+//         getAppResult(res);
+//         // printObjectList(res.trackObjList, nullptr);
+//         _printAppResult(res);
+//         // done — memory released automatically when function ends
+// /*   
+// #ifndef SPDLOG_USE_SYSLOG
+//         logger->info("====================================================================================");
+// #endif
+//         logger->info("log:frameID = {}", res.frameID);
+//         logger->info("log:res.trackObjList.size() = {}", res.trackObjList.size());
+// #ifndef SPDLOG_USE_SYSLOG
+//         logger->info("====================================================================================");
+// #endif
+// */
+
+
+// #ifdef SAV837 //TODO: Not implemented yet
+//         // Transfer data through socket to visualize
+//         _sendDataLiveMode(success, jsonLog, server_ip, server_port, m_resultFrameIdx);
+// #endif
+
+//         success = APP_LOGGED;
+//         m_bDone = true;
+//     }
+
+//     if (m_estimateTime)
+//     {
+//         auto time_1 = std::chrono::high_resolution_clock::now();
+//         m_logger->info("Processing Time: {} ms",
+//                        std::chrono::duration_cast<std::chrono::nanoseconds>(time_1 - time_0).count() / (1000.0 * 1000));
+//     }
+
+//     return success;
+// }
+
+
 void WNC_APP::addFrame(ea_tensor_t* imgTensor)
 {
     updateInput(imgTensor);
@@ -695,13 +828,16 @@ void WNC_APP::stopProcessingThread()
 
 bool WNC_APP::_hasWorkToDo()
 {
-    return !m_yolov8->isPredictionBufferEmpty() || !m_yolov8PostProc->isOutputBufferEmpty();
+    // return !m_yolov8->isPredictionBufferEmpty() || !m_yolov8PostProc->isOutputBufferEmpty();
+    return !m_motionFilter->isPredictionBufferEmpty() || !m_yolov8PostProc->isOutputBufferEmpty();
 }
 
 bool WNC_APP::isProcessingComplete()
 {
-    bool yoloInputEmpty      = m_yolov8->isInputBufferEmpty();
-    bool yoloPredEmpty       = m_yolov8->isPredictionBufferEmpty();
+    // bool yoloInputEmpty      = m_yolov8->isInputBufferEmpty();
+    // bool yoloPredEmpty       = m_yolov8->isPredictionBufferEmpty();
+    bool yoloInputEmpty      = m_motionFilter->isInputBufferEmpty(); // DROID-SLAM
+    bool yoloPredEmpty       = m_motionFilter->isPredictionBufferEmpty(); // DROID-SLAM
     bool postProcInputEmpty  = m_yolov8PostProc->isInputBufferEmpty();
     bool postProcOutputEmpty = m_yolov8PostProc->isOutputBufferEmpty();
 
@@ -710,10 +846,10 @@ bool WNC_APP::isProcessingComplete()
     m_logger->debug("isProcessingComplete: PostProc input empty: {}, PostProc output empty: {}", postProcInputEmpty,
                     postProcOutputEmpty);
     m_logger->debug("isProcessingComplete: m_bDone: {}, YOLO done: {}, PostProc done: {}", m_bDone,
-                    m_yolov8->m_bDone, m_yolov8PostProc->m_bDone);
+                    m_motionFilter->m_bDone, m_yolov8PostProc->m_bDone);
 
     return yoloInputEmpty && yoloPredEmpty && postProcInputEmpty && postProcOutputEmpty && m_bDone
-            && m_yolov8->m_bDone && m_yolov8PostProc->m_bDone;
+            && m_motionFilter->m_bDone && m_yolov8PostProc->m_bDone;
 }
 
 
@@ -1106,7 +1242,8 @@ void WNC_APP::_updateDebugProfile()
     float inferenceTime    = 0.0f;
     int   inputBufferSize  = 0;
     int   outputBufferSize = 0;
-    m_yolov8->getDebugProfiles(m_debugProfile.AIInfrerenceTime, m_debugProfile.yoloADAS_InputBufferSize,
+    // DROID-SLAM
+    m_motionFilter->getDebugProfiles(m_debugProfile.AIInfrerenceTime, m_debugProfile.yoloADAS_InputBufferSize,
                                  m_debugProfile.yoloADAS_OutputBufferSize);
     m_yolov8PostProc->getDebugProfiles(m_debugProfile.postProc_InputBufferSize,
                                          m_debugProfile.postProc_OutputBufferSize);
@@ -1180,7 +1317,7 @@ int WNC_APP::run_sequential(WNC_APP_Results& appResult, cv::Mat& imgFrame, strin
     // AI Inference
     // =========================== //
     YOLOv8_Prediction pred;
-    if (!m_yolov8->run_sequential(inputImage, pred))
+    if (!m_motionFilter->run_sequential(inputImage, pred)) // DROID-SLAM
     {
         return -1;
     }

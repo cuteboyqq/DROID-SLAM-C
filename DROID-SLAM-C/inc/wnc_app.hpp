@@ -37,6 +37,7 @@
 #include "logger.hpp"
 #include "socket.hpp"
 #include "skeleton_postproc.hpp"
+#include "motion_filter.hpp" // Alister add 2025-11-24
 
 using namespace std;
 
@@ -147,7 +148,9 @@ public:
     cv::Mat             m_resultImage;
     YOLOv8_POSTPROC*    m_yolov8PostProc = nullptr;
     YOLOv8*             m_yolov8 = nullptr;
+    MotionFilter*       m_motionFilter = nullptr; // Alister add 2025-11-24
     JSON_LOG*           m_jsonLog;
+    // DroidFrontend*      m_droidfrontend = nullptr; // Alister add 2025-11-28
     POST_PROC_RESULTS   m_procResult;
     Object              m_tailingObject;
     SOCKET*             m_socket;

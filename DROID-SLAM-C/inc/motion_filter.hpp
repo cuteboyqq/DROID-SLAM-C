@@ -44,8 +44,8 @@ extern "C" {
 
 // constexpr int MODEL_HEIGHT     = 288;
 // constexpr int MODEL_WIDTH      = 512;
-constexpr int VSLAM_MODEL_HEIGHT     = 384;
-constexpr int VSLAM_MODEL_WIDTH      = 512;
+constexpr int VSLAM_MODEL_HEIGHT  = 328;
+constexpr int VSLAM_MODEL_WIDTH   = 584;
 // constexpr int FRAME_HEIGHT     = 288;
 // constexpr int FRAME_WIDTH      = 512;
 // constexpr int NUM_OBJ_CLASSES  = 2;
@@ -205,9 +205,9 @@ private:
     int m_kptsBufferSize  = 0;
 
     // DROID Slam Buffer Size, Alister modified 2025-11-24
-    int m_netBufferSize  = 0;
-    int m_inpBufferSize  = 0;
-    int m_gmapBufferSize = 0;
+    int m_netBufferSize    = 0;
+    int m_inpBufferSize    = 0;
+    int m_gmapBufferSize   = 0;
 
     // Buffer
     float* m_objBoxBuff;

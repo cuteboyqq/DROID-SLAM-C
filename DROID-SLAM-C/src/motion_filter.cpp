@@ -550,17 +550,10 @@ bool MotionFilter::process_one_image(
         float(cx * (float(w1) / w0)),
         float(cy * (float(h1) / h0))
     };
-	//   outFrame.intr = {
-    //     float(fx * 1.0),
-    //     float(fy * 1.0),
-    //     float(cx * 1.0),
-    //     float(cy * 1.0)
-    // };
-
 
     outFrame.image = image;
-    outFrame.h = h0;//h1;
-    outFrame.w = w0;//w1;
+    outFrame.h = h1;
+    outFrame.w = w1;
 
     return true;
 }
@@ -1294,6 +1287,25 @@ bool MotionFilter::_run(ea_tensor_t* imgTensor, int frameIdx)
 	m_slam_pred.wd = m_frameData.w;
 	// // DROID-SLAM initialize more paramter, Alister add 2025-11-24
 	// // TODO, add intrinsic, tstamp, index, dsip, disp_sen, etc.
+
+	// Log image info
+	logger->info("SLAM Pred img: rows = {}, cols = {}, channels = {}",
+		m_slam_pred.img.rows,
+		m_slam_pred.img.cols,
+		m_slam_pred.img.channels());
+
+	// Log intrinsics stored in std::array<float,4>
+	logger->info("SLAM Pred intrinsics: fx={} fy={} cx={} cy={}",
+		m_slam_pred.intrinsics[0],
+		m_slam_pred.intrinsics[1],
+		m_slam_pred.intrinsics[2],
+		m_slam_pred.intrinsics[3]);
+
+	// Log height & width
+	logger->info("SLAM Pred size: ht={}, wd={}",
+		m_slam_pred.ht,
+		m_slam_pred.wd);
+
 
 	std::pair<int, DROID_SLAM_Prediction> slam_pair = std::make_pair(frameIdx, m_slam_pred);
 	m_slam_predictionBuffer.push_back(slam_pair);

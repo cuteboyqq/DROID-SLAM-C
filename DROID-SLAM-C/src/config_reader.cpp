@@ -71,8 +71,9 @@ void AppConfigReader::read(std::string configPath)
         int    modelHeight          = 320;
 
         // DROID-SLAM Model Information
-        string fnetModelPath = "";
-        string cnetModelPath = "";
+        string fnetModelPath   = "";
+        string cnetModelPath   = "";
+        string updateModelPath = "";
   
         // DROID-SLAM Calibration Information
         string calibPath = "";
@@ -162,6 +163,7 @@ void AppConfigReader::read(std::string configPath)
         // DROID-SLAM Model Information, Alister add 2025-11-24
         configReader->getValue("FnetModelPath", fnetModelPath);
         configReader->getValue("CnetModelPath", cnetModelPath);
+        configReader->getValue("UpdateModelPath", updateModelPath);
         // DROID-SLAM Calibration Information
         configReader->getValue("CalibPath", calibPath);
 
@@ -239,8 +241,9 @@ void AppConfigReader::read(std::string configPath)
             logger->info("ModelWidth \t\t= {}",     modelWidth);
             logger->info("ModelHeight \t\t= {}",    modelHeight);
             // DROID-SLAM
-            logger->info("FnetModelPath \t\t= {}",  fnetModelPath);
-            logger->info("CnetModelPath \t\t= {}",  cnetModelPath);
+            logger->info("FnetModelPath \t\t= {}",   fnetModelPath);
+            logger->info("CnetModelPath \t\t= {}",   cnetModelPath);
+            logger->info("UpdateModelPath \t\t= {}", updateModelPath);
 
             // DROID-SLAM calibration
             logger->info("CalibPath \t\t= {}",  calibPath);
@@ -344,6 +347,7 @@ void AppConfigReader::read(std::string configPath)
         // DROID-SLAM Model Information
         m_config->fnetModelPath      = fnetModelPath;
         m_config->cnetModelPath      = cnetModelPath;
+        m_config->updateModelPath    = updateModelPath; // Alister add update model at 2025-11-27
 
         // Model ROI Information
         m_config->startXRatio = std::stof(startXRatio);
